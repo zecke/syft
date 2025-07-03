@@ -8,15 +8,16 @@ package buildinfo
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"testing"
 
+	"github.com/anchore/syft/internal/vuln/test"
+	"github.com/anchore/syft/internal/vuln/testenv"
 	"github.com/google/go-cmp/cmp"
 	"golang.org/x/tools/go/packages/packagestest"
-	"golang.org/x/vuln/internal/test"
-	"golang.org/x/vuln/internal/testenv"
 )
 
 // testAll executes testing function ft on all valid combinations
@@ -51,7 +52,13 @@ func TestExtractPackagesAndSymbols(t *testing.T) {
 			binary, done := test.GoBuild(t, "testdata/src", "", false, "GOOS", goos, "GOARCH", goarch)
 			defer done()
 
-			_, syms, _, err := ExtractPackagesAndSymbols(binary)
+			f, err := os.Open(binary)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer f.Close()
+
+			_, syms, _, err := ExtractPackagesAndSymbols(f)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -67,16 +74,6 @@ func TestExtractPackagesAndSymbols(t *testing.T) {
 				t.Errorf("(-want,+got):%s", diff)
 			}
 		})
-}
-
-func TestAncientGoBinaries(t *testing.T) {
-	_, _, bi, err := ExtractPackagesAndSymbols("testdata/bin/hello-world")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if bi.GoVersion != "go1.6.4" {
-		t.Errorf("want go1.6.4 Go binary version; got %s", bi.GoVersion)
-	}
 }
 
 // sortedSymbols gets symbols for pkg and
@@ -152,7 +149,12 @@ func Vuln() {
 				t.Fatalf("failed to build the binary %v %v", err, string(out))
 			}
 
-			_, syms, _, err := ExtractPackagesAndSymbols(filepath.Join(e.Config.Dir, "entry"))
+			f, err := os.Open(filepath.Join(e.Config.Dir, "entry"))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			_, syms, _, err := ExtractPackagesAndSymbols(f)
 			if err != nil {
 				t.Fatal(err)
 			}

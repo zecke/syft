@@ -7,9 +7,10 @@
 package buildinfo
 
 import (
+	"os"
 	"testing"
 
-	"golang.org/x/vuln/internal/test"
+	"github.com/anchore/syft/internal/vuln/test"
 )
 
 // TestStrippedBinary checks that there is no symbol table for
@@ -20,7 +21,12 @@ func TestStrippedBinary(t *testing.T) {
 			binary, done := test.GoBuild(t, "testdata/src", "", true, "GOOS", goos, "GOARCH", goarch)
 			defer done()
 
-			_, syms, _, err := ExtractPackagesAndSymbols(binary)
+			f, err := os.Open(binary)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer f.Close()
+			_, syms, _, err := ExtractPackagesAndSymbols(f)
 			if err != nil {
 				t.Fatal(err)
 			}

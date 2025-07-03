@@ -7,7 +7,7 @@ package osv_test
 import (
 	"testing"
 
-	"golang.org/x/vuln/internal/test"
+	"github.com/anchore/syft/internal/vuln/test"
 )
 
 func TestImports(t *testing.T) {

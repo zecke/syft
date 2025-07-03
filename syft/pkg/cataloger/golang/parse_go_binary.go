@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"regexp"
 	"runtime/debug"
 	"slices"
@@ -49,6 +50,55 @@ const devel = "(devel)"
 type goBinaryCataloger struct {
 	licenseResolver   goLicenseResolver
 	mainModuleVersion MainModuleVersionConfig
+}
+
+// splitLicensesByPath creates a mapping from license path to a slice of licenses
+// TODO(zecke): We should be able to take the path from a field like `Location` instead of having to discriminate between file and http URLs. This would also avoid having to "swallow" the errors when handling the URL.
+// TODO(zecke): Write tests that work with file:// and goproxy URLs..
+func splitLicensesByPath(pathPrefix string, licenses []pkg.License) map[string][]pkg.License {
+	licPaths := make(map[string][]pkg.License)
+
+	for _, lic := range licenses {
+		// TODO(zecke): What abou the other URLs?
+
+		licURL, err := url.Parse(lic.URLs[0])
+		if err != nil {
+			log.Errorf("failed to parse license: %v %v", lic.URLs[0], err)
+			continue
+		}
+		f := licURL.Fragment
+		if f == "" {
+			f = licURL.Path
+		}
+		pos := strings.Index(f, pathPrefix)
+		if pos < 0 {
+			log.Errorf("failed to find version in fragment: %v %v", f, pathPrefix)
+			continue
+		}
+		f = f[pos+len(pathPrefix) : len(f)]
+		if pos := strings.LastIndex(f, "/"); pos >= 0 {
+			f = f[0:pos]
+		}
+		f = strings.TrimPrefix(f, "/")
+
+		l := licPaths[f]
+		l = append(l, lic)
+		licPaths[f] = l
+	}
+	return licPaths
+}
+
+// findMatchingLicenses finds the most specific slice of licenses for a given Go import "subpath"
+func findMatchingLicenses(licenses map[string][]pkg.License, subpath string) []pkg.License {
+	comps := strings.Split(subpath, "/")
+
+	for i := len(comps); i >= 0; i-- {
+		p := strings.Join(comps[0:i], "/")
+		if lics, ok := licenses[p]; ok {
+			return lics
+		}
+	}
+	return nil
 }
 
 func newGoBinaryCataloger(opts CatalogerConfig) *goBinaryCataloger {
@@ -110,17 +160,20 @@ func (c *goBinaryCataloger) buildGoPkgInfo(ctx context.Context, resolver file.Re
 		mod.Main = createMainModuleFromPath(mod)
 	}
 
+	mods := buildExtendedModules(mod)
+
 	var pkgs []pkg.Package
-	for _, dep := range mod.Deps {
-		if dep == nil {
+	for _, dep := range mods {
+		if dep.Module == nil {
 			continue
 		}
 
 		lics := c.licenseResolver.getLicenses(ctx, resolver, dep.Path, dep.Version)
+		licPaths := splitLicensesByPath(dep.Version, lics)
 		gover, experiments := getExperimentsFromVersion(mod.GoVersion)
 
 		m := newBinaryMetadata(
-			dep,
+			dep.Module,
 			mod.Main.Path,
 			gover,
 			arch,
@@ -129,14 +182,46 @@ func (c *goBinaryCataloger) buildGoPkgInfo(ctx context.Context, resolver file.Re
 			experiments,
 		)
 
-		p := c.newGoBinaryPackage(
-			dep,
-			m,
-			lics,
-			location.WithAnnotation(pkg.EvidenceAnnotationKey, pkg.PrimaryEvidenceAnnotation),
-		)
-		if pkg.IsValid(&p) {
-			pkgs = append(pkgs, p)
+		commonLic := true
+		var byPath []pkg.Package
+		for _, importPath := range dep.packages {
+			subpath := importPath
+			if subpathPos := strings.Index(importPath, dep.Path); subpathPos >= 0 {
+				subpath = strings.Trim(subpath[subpathPos+len(dep.Path):], "/")
+			}
+
+			specLics := findMatchingLicenses(licPaths, subpath)
+			if len(specLics) == 0 {
+				specLics = lics
+			}
+			if !slices.EqualFunc(specLics, lics, func(a pkg.License, b pkg.License) bool { return a.SPDXExpression == b.SPDXExpression }) {
+				commonLic = false
+			}
+
+			p := c.newGoBinaryPackageWithPath(
+				dep.Module,
+				importPath,
+				m,
+				specLics,
+				location.WithAnnotation(pkg.EvidenceAnnotationKey, pkg.PrimaryEvidenceAnnotation),
+			)
+			if pkg.IsValid(&p) {
+				byPath = append(byPath, p)
+			}
+		}
+
+		if commonLic {
+			p := c.newGoBinaryPackage(
+				dep.Module,
+				m,
+				lics,
+				location.WithAnnotation(pkg.EvidenceAnnotationKey, pkg.PrimaryEvidenceAnnotation),
+			)
+			if pkg.IsValid(&p) {
+				pkgs = append(pkgs, p)
+			}
+		} else {
+			pkgs = append(pkgs, byPath...)
 		}
 	}
 

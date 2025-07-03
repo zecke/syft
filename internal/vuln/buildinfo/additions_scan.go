@@ -13,14 +13,13 @@ import (
 	"debug/buildinfo"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
-	"os"
 	"runtime/debug"
 	"strings"
 
+	"github.com/anchore/syft/internal/vuln/gosym"
 	"golang.org/x/tools/go/packages"
-	"golang.org/x/vuln/internal/gosym"
-	"golang.org/x/vuln/internal/goversion"
 )
 
 func debugModulesToPackagesModules(debugModules []*debug.Module) []*packages.Module {
@@ -50,26 +49,11 @@ type Symbol struct {
 //
 // If the symbol table is not available, such as in the case of stripped
 // binaries, returns module and binary info but without the symbol info.
-func ExtractPackagesAndSymbols(file string) ([]*packages.Module, []Symbol, *debug.BuildInfo, error) {
-	bin, err := os.Open(file)
+func ExtractPackagesAndSymbols(r io.ReaderAt) ([]*packages.Module, []Symbol, *debug.BuildInfo, error) {
+	bi, err := buildinfo.Read(r)
 	if err != nil {
+		// Skip for ancient Go binary.
 		return nil, nil, nil, err
-	}
-	defer bin.Close()
-
-	bi, err := buildinfo.Read(bin)
-	if err != nil {
-		// It could be that bin is an ancient Go binary.
-		v, err := goversion.ReadExe(file)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		bi := &debug.BuildInfo{
-			GoVersion: v.Release,
-			Main:      debug.Module{Path: v.ModuleInfo},
-		}
-		// We cannot analyze symbol tables of ancient binaries.
-		return nil, nil, bi, nil
 	}
 
 	funcSymName := gosym.FuncSymName(bi.GoVersion)
@@ -77,7 +61,7 @@ func ExtractPackagesAndSymbols(file string) ([]*packages.Module, []Symbol, *debu
 		return nil, nil, nil, fmt.Errorf("binary built using unsupported Go version: %q", bi.GoVersion)
 	}
 
-	x, err := openExe(bin)
+	x, err := openExe(r)
 	if err != nil {
 		return nil, nil, nil, err
 	}

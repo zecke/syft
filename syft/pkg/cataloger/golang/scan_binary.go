@@ -1,23 +1,57 @@
 package golang
 
 import (
-	"debug/buildinfo"
 	"fmt"
 	"io"
+	"maps"
 	"runtime/debug"
+	"slices"
+	"strings"
 
 	"github.com/kastenhq/goversion/version"
 
 	"github.com/anchore/syft/internal/log"
 	"github.com/anchore/syft/internal/unknown"
+	"github.com/anchore/syft/internal/vuln/buildinfo"
 	"github.com/anchore/syft/syft/file"
 	"github.com/anchore/syft/syft/internal/unionreader"
 )
 
 type extendedBuildInfo struct {
 	*debug.BuildInfo
+	packages       []string
 	cryptoSettings []string
 	arch           string
+}
+
+type extendedModule struct {
+	*debug.Module
+	packages []string
+}
+
+// buildExtendedModules combines the known Go modules and the discovered packages into a slice of extendedModule.
+func buildExtendedModules(bi *extendedBuildInfo) []*extendedModule {
+	p2m := make(map[string]*extendedModule)
+	for _, dep := range bi.Deps {
+		if dep == nil {
+			continue
+		}
+		p2m[dep.Path] = &extendedModule{Module: dep}
+	}
+
+	// TODO(freyth): A trie and longest match would be a better fit.
+	for _, p := range bi.packages {
+		comps := strings.Split(p, "/")
+		for i := len(comps); i > 0; i-- {
+			c := strings.Join(comps[0:i], "/")
+			if m, ok := p2m[c]; ok {
+				m.packages = append(m.packages, p)
+			}
+
+		}
+	}
+
+	return slices.Collect(maps.Values(p2m))
 }
 
 // scanFile scans file to try to report the Go and module versions.
@@ -32,7 +66,7 @@ func scanFile(location file.Location, reader unionreader.UnionReader) ([]*extend
 
 	var builds []*extendedBuildInfo
 	for _, r := range readers {
-		bi, err := getBuildInfo(r)
+		bi, packages, err := getBuildInfo(r)
 		if err != nil {
 			log.WithFields("file", location.RealPath, "error", err).Trace("unable to read golang buildinfo")
 
@@ -61,7 +95,7 @@ func scanFile(location file.Location, reader unionreader.UnionReader) ([]*extend
 			}
 		}
 
-		builds = append(builds, &extendedBuildInfo{BuildInfo: bi, cryptoSettings: v, arch: arch})
+		builds = append(builds, &extendedBuildInfo{BuildInfo: bi, packages: packages, cryptoSettings: v, arch: arch})
 	}
 	return builds, errs
 }
@@ -89,7 +123,7 @@ func getCryptoSettingsFromVersion(v version.Version) []string {
 	return cryptoSettings
 }
 
-func getBuildInfo(r io.ReaderAt) (bi *debug.BuildInfo, err error) {
+func getBuildInfo(r io.ReaderAt) (bi *debug.BuildInfo, packages []string, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			// this can happen in cases where a malformed binary is passed in can be initially parsed, but not
@@ -98,7 +132,15 @@ func getBuildInfo(r io.ReaderAt) (bi *debug.BuildInfo, err error) {
 			err = fmt.Errorf("recovered from panic: %v", r)
 		}
 	}()
-	bi, err = buildinfo.Read(r)
+	_, symbols, bi, err := buildinfo.ExtractPackagesAndSymbols(r)
+	paths := make(map[string]struct{})
+	for _, symbol := range symbols {
+		if strings.Contains(symbol.Pkg, ".(") {
+			continue
+		}
+		paths[symbol.Pkg] = struct{}{}
+	}
+	packages = slices.Collect(maps.Keys(paths))
 
 	// note: the stdlib does not export the error we need to check for
 	if err != nil {

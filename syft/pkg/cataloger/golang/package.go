@@ -9,7 +9,7 @@ import (
 	"github.com/anchore/syft/syft/pkg"
 )
 
-func (c *goBinaryCataloger) newGoBinaryPackage(dep *debug.Module, m pkg.GolangBinaryBuildinfoEntry, licenses []pkg.License, locations ...file.Location) pkg.Package {
+func (c *goBinaryCataloger) newGoBinaryPackageWithPath(dep *debug.Module, importPath string, m pkg.GolangBinaryBuildinfoEntry, licenses []pkg.License, locations ...file.Location) pkg.Package {
 	if dep.Replace != nil {
 		dep = dep.Replace
 	}
@@ -23,10 +23,10 @@ func (c *goBinaryCataloger) newGoBinaryPackage(dep *debug.Module, m pkg.GolangBi
 	}
 
 	p := pkg.Package{
-		Name:      dep.Path,
+		Name:      importPath,
 		Version:   version,
 		Licenses:  pkg.NewLicenseSet(licenses...),
-		PURL:      packageURL(dep.Path, version),
+		PURL:      packageURL(importPath, version),
 		Language:  pkg.Go,
 		Type:      pkg.GoModulePkg,
 		Locations: file.NewLocationSet(locations...),
@@ -36,6 +36,10 @@ func (c *goBinaryCataloger) newGoBinaryPackage(dep *debug.Module, m pkg.GolangBi
 	p.SetID()
 
 	return p
+}
+
+func (c *goBinaryCataloger) newGoBinaryPackage(dep *debug.Module, m pkg.GolangBinaryBuildinfoEntry, licenses []pkg.License, locations ...file.Location) pkg.Package {
+	return c.newGoBinaryPackageWithPath(dep, dep.Path, m, licenses, locations...)
 }
 
 func newBinaryMetadata(dep *debug.Module, mainModule, goVersion, architecture string, buildSettings pkg.KeyValues, cryptoSettings, experiments []string) pkg.GolangBinaryBuildinfoEntry {

@@ -4,7 +4,7 @@
 
 package semver
 
-import "golang.org/x/vuln/internal/osv"
+import "github.com/anchore/syft/internal/vuln/osv"
 
 // NonSupersededFix returns a fixed version from ranges
 // that is not superseded by any other fix or any other

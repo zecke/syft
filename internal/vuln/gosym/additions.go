@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	sv "golang.org/x/mod/semver"
-	"golang.org/x/vuln/internal/semver"
+	"github.com/anchore/syft/internal/vuln/semver"
 )
 
 const (

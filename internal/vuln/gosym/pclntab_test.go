@@ -14,8 +14,8 @@ import (
 	"strings"
 	"testing"
 
-	"golang.org/x/vuln/internal/test"
-	"golang.org/x/vuln/internal/testenv"
+	"github.com/anchore/syft/internal/vuln/test"
+	"github.com/anchore/syft/internal/vuln/testenv"
 )
 
 func dotest(t *testing.T) (binaryName string, cleanup func()) {
